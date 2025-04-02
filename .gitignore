@@ -1,1 +1,7 @@
 kilt_knowledgesource.json
+huggingface.txt
+.venv
+*.gguf
+**/tmp
+**/.ipynb_checkpoints
+**/__pycache__
