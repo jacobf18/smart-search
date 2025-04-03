@@ -4,8 +4,7 @@ from typing import List, Dict
 
 from logger_config import logger
 
-# TODO: Add node host logic
-def search_by_http(query: str, host: str = '10.197.17.38', port: int = 8090) -> List[Dict]:
+def search_by_http(query: str, host: str = 'localhost', port: int = 8090) -> List[Dict]:
     url = f"http://{host}:{port}"
     response = requests.post(url, json={'query': query})
 

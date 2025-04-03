@@ -29,12 +29,13 @@ def _normalize_subquery(subquery: str) -> str:
 class CoRagAgent:
 
     def __init__(
-            self, vllm_client: VllmClient, corpus: Dataset
+            self, vllm_client: VllmClient, corpus: Dataset, e5_ip
     ):
         self.vllm_client = vllm_client
         self.corpus = corpus
         self.tokenizer: PreTrainedTokenizerFast = AutoTokenizer.from_pretrained(get_vllm_model_id())
         self.lock = threading.Lock()
+        self.e5_ip = e5_ip
 
     def sample_path(
             self, query: str, task_desc: str,
@@ -128,7 +129,7 @@ class CoRagAgent:
     def _get_subanswer_and_doc_ids(
             self, subquery: str, max_message_length: int = 4096
     ) -> Tuple[str, List]:
-        retriever_results: List[Dict] = search_by_http(query=subquery)
+        retriever_results: List[Dict] = search_by_http(query=subquery, host=self.e5_ip)
         doc_ids: List[str] = [res['doc_id'] for res in retriever_results]
         documents: List[str] = [format_input_context(self.corpus[int(doc_id)]) for doc_id in doc_ids][::-1]
 
