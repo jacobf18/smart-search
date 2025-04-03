@@ -36,7 +36,7 @@ assert e5_ip is not None, "E5 IP address must be set"
 vllm_client: VllmClient = VllmClient(get_vllm_model_id(host=vllm_ip), host=vllm_ip)
 corpus: Dataset = load_corpus()
 corag_agent: CoRagAgent = CoRagAgent(vllm_client=vllm_client, corpus=corpus, e5_ip=e5_ip)
-tokenizer: PreTrainedTokenizerFast = AutoTokenizer.from_pretrained(get_vllm_model_id())
+tokenizer: PreTrainedTokenizerFast = AutoTokenizer.from_pretrained(get_vllm_model_id(host=vllm_ip))
 tokenizer_lock: threading.Lock = threading.Lock()
 processed_cnt: AtomicCounter = AtomicCounter()
 total_cnt: int = 0

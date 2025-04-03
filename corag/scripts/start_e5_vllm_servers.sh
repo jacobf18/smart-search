@@ -49,11 +49,3 @@ done
 export VLLM_IP=$(cat ip_vllm.txt)
 echo "VLLM Server Compute node allocated: $COMPUTE_NODE ($VLLM_IP)"
 rm -f ip_vllm.txt # cleanup
-
-
-
-# # Set up SSH tunnel to forward localhost:8090 to the compute node
-# echo "Setting up SSH tunnel to $COMPUTE_NODE ($COMPUTE_IP:8090)"
-# ssh -fN -L 8090:"$COMPUTE_IP":8090 $USER@$COMPUTE_NODE
-
-# echo "Port forwarding is active. You can now access localhost:8090."
