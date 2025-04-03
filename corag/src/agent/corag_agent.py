@@ -29,13 +29,14 @@ def _normalize_subquery(subquery: str) -> str:
 class CoRagAgent:
 
     def __init__(
-            self, vllm_client: VllmClient, corpus: Dataset, e5_ip
+            self, vllm_client: VllmClient, corpus: Dataset, e5_ip, vllm_ip
     ):
         self.vllm_client = vllm_client
         self.corpus = corpus
-        self.tokenizer: PreTrainedTokenizerFast = AutoTokenizer.from_pretrained(get_vllm_model_id())
+        self.tokenizer: PreTrainedTokenizerFast = AutoTokenizer.from_pretrained(get_vllm_model_id(host=vllm_ip))
         self.lock = threading.Lock()
         self.e5_ip = e5_ip
+        self.vllm_ip = vllm_ip
 
     def sample_path(
             self, query: str, task_desc: str,
