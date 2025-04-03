@@ -38,6 +38,8 @@ class Arguments(TrainingArguments):
     # available: greedy, tree_search, best_of_n
     decode_strategy: str = field(default='greedy', metadata={'help': 'decoding strategy'})
     best_n: int = field(default=4, metadata={'help': 'best of n'})
+    vllm_ip: str = field(default='localhost', metadata={'help': 'vllm server ip'})
+    e5_ip: str = field(default='localhost', metadata={'help': 'e5 server ip'})
 
     def __post_init__(self):
         super(Arguments, self).__post_init__()

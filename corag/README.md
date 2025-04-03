@@ -30,20 +30,19 @@ pip install -r requirements.txt
 Here we provide an example for running inference with CoRAG-8B on the MultihopQA dataset.
 We tested this on a machine with 8 A100 GPUs (40GB).
 
-1. Download embeddings and start the E5 search server.
+Everything below assumes you are in the `corag` directory.
+
+1. Download embeddings.
 
 ```bash
 bash scripts/download_embeddings.sh
-
-# The server logs will be in e5_server.log
-bash scripts/start_e5_server.sh
 ```
 
-2. Start the vLLM server and load the CoRAG-8B model.
+2. Start the E5 and vLLM servers and load the CoRAG-8B model.
 
 ```bash
 # The server logs will be in vllm_server.log
-bash scripts/start_vllm_server.sh corag/CoRAG-Llama3.1-8B-MultihopQA
+source ./scripts/start_e5_vllm_servers.sh
 ```
 
 3. Run the inference script. By default, we will use greedy decoding with max path length `L = 6`.
