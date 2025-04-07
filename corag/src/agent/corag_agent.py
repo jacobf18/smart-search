@@ -8,7 +8,7 @@ from openai.types.chat import ChatCompletion
 from transformers import AutoTokenizer, PreTrainedTokenizerFast
 
 from logger_config import logger
-from vllm_client import VllmClient, get_vllm_model_id
+from vllm_client_local import VllmClient, get_vllm_model_id
 from search.search_utils import search_by_http
 from data_utils import format_input_context, parse_answer_logprobs
 from prompts import get_generate_subquery_prompt, get_generate_intermediate_answer_prompt, get_generate_final_answer_prompt
@@ -29,7 +29,7 @@ def _normalize_subquery(subquery: str) -> str:
 class CoRagAgent:
 
     def __init__(
-            self, vllm_client: VllmClient, corpus: Dataset, e5_ip, vllm_ip
+            self, vllm_client: VllmClient, corpus: Dataset, e5_ip: str, vllm_ip: str
     ):
         self.vllm_client = vllm_client
         self.corpus = corpus

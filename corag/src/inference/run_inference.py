@@ -13,7 +13,7 @@ from datasets import Dataset, load_dataset
 from config import Arguments
 from logger_config import logger
 from data_utils import log_random_samples, load_corpus, format_documents_for_final_answer
-from vllm_client import VllmClient, get_vllm_model_id
+from vllm_client_local import VllmClient, get_vllm_model_id
 from utils import save_json_to_file, AtomicCounter
 from agent import CoRagAgent, RagPath
 from inference.metrics import compute_metrics_dict
@@ -126,7 +126,9 @@ def main():
     global total_cnt
     total_cnt = len(ds)
 
-    results: List[Dict] = list(executor.map(_generate_single_example, ds))
+    results: List[Dict] = list(executor.map(_generate_single_example, ds))[:5] # cut down to 5 for testing
+    
+    exit() # exit early for testing
     ds = ds.add_column('prediction', [r['prediction'] for r in results])
     ds = ds.add_column('subqueries', [r['subqueries'] for r in results])
     ds = ds.add_column('subanswers', [r['subanswers'] for r in results])
