@@ -23,7 +23,6 @@ done
 # Get the IP of the compute node
 export E5_IP=$(cat ip_e5.txt)
 echo "E5 Server Compute node allocated: $COMPUTE_NODE ($E5_IP)"
-rm -f ip_e5.txt # cleanup
 
 # VLLM Job
 # Submit the batch job and capture the Job ID
@@ -48,4 +47,3 @@ done
 # Get the IP of the compute node
 export VLLM_IP=$(cat ip_vllm.txt)
 echo "VLLM Server Compute node allocated: $COMPUTE_NODE ($VLLM_IP)"
-rm -f ip_vllm.txt # cleanup

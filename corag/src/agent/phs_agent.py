@@ -5,15 +5,12 @@ from typing import Optional, List, Dict
 
 from agent.agent_utils import RagPath
 from openai.types.chat import ChatCompletion
-from prompts import (
-    get_generate_subquery_prompt,
-    get_generate_final_answer_prompt
-)
+from prompts import get_generate_subquery_prompt, get_generate_intermediate_answer_prompt, get_generate_final_answer_prompt
 
 from agent.corag_agent import CoRagAgent
 from agent.corag_agent import _normalize_subquery
 
-from vllm_client import VllmClient
+from vllm_client_local import VllmClient
 from datasets import Dataset
 
 class TreeNode:
@@ -52,6 +49,7 @@ class CoRagAgentWithPHS(CoRagAgent):
         max_message_length: int = 4096,
         temperature: float = 0.7,
         expand_size: int = 4,
+        max_tree_size = 50,
         **kwargs
     ) -> RagPath:
         root_path = RagPath(query=query, past_subqueries=[], past_subanswers=[], past_doc_ids=[])
@@ -59,8 +57,11 @@ class CoRagAgentWithPHS(CoRagAgent):
 
         open_list = []
         heapq.heappush(open_list, root_node)
+        
+        explored_num = 0
 
-        while open_list:
+        while open_list and explored_num < max_tree_size:
+            explored_num += 1
             node = heapq.heappop(open_list)
             current_path = node.path
 
@@ -79,7 +80,8 @@ class CoRagAgentWithPHS(CoRagAgent):
                 messages=messages,
                 return_str=False,
                 n=expand_size,
-                extra_body={"prompt_logprobs": 1},
+                # extra_body={"prompt_logprobs": 1},
+                logprobs=True,
                 temperature=temperature,
                 **kwargs
             )
@@ -88,8 +90,9 @@ class CoRagAgentWithPHS(CoRagAgent):
                 subquery = _normalize_subquery(choice.message.content)
                 if subquery in current_path.past_subqueries:
                     continue
-
-                token_logprobs = choice.logprobs.token_logprobs or []
+                
+                token_logprobs = [c.logprob for c in choice.logprobs.content]
+                
                 sub_logprob = sum(token_logprobs) / max(len(token_logprobs), 1)
 
                 subanswer, doc_ids = self._get_subanswer_and_doc_ids(
@@ -113,6 +116,7 @@ class CoRagAgentWithPHS(CoRagAgent):
                 heapq.heappush(open_list, new_node)
 
         # use this only if nothing worked idk?? can use logger instead
+        print(f"Did not find a solution within {max_tree_size} nodes. Returning the root path.")
         return self.sample_path(
                     query=query,
                     task_desc=task_desc,
@@ -125,7 +129,6 @@ class CoRagAgentWithPHS(CoRagAgent):
     def _is_solution(self, path: RagPath, task_desc: str, max_message_length: int) -> bool:
         log_prob = self._eval_single_path(
             path,
-            task_desc=task_desc,
             max_message_length=max_message_length
         )
         # This is the log probability of the string 'No relevant information found'
@@ -147,26 +150,30 @@ class CoRagAgentWithPHS(CoRagAgent):
             int: Estimated number of remaining subqueries
         """
         # Ask the LLM how many subqueries it expects are remaining
-        messages: List[Dict] = self.get_generate_intermediate_answer_prompt(
+        messages: List[Dict] = get_generate_intermediate_answer_prompt(
             subquery=path.query,
             documents=[f'Q: {q}\nA: {a}' for q, a in zip(path.past_subqueries, path.past_subanswers)],
         )
-        messages.append({'role': 'user', 'content': 'How many more subqueries are needed to fully answer the original query. Respond with a single integer.'})
+        # messages.append({'role': 'user', 'content': 'How many more subqueries are needed to fully answer the original query. Respond with a single integer.'})
+        messages.append({'role': 'user', 
+                         'content': f'What subqueries should be asked to fully answer the original query: "{path.query}". Separate subqueries with question marks "?".'})
         self._truncate_long_messages(messages, max_length=max_message_length)
 
         response: ChatCompletion = self.vllm_client.call_chat(
             messages=messages,
             return_str=False,
-            max_tokens=5,
+            # max_tokens=5,
             **kwargs
         )
 
         text = response.choices[0].message.content.strip()
+        
+        est_remaining = max(1,len(text.split("?")))
 
-        # idk how to ensure its an int, this was an attempt
-        try:
-            est_remaining = int(text.split()[0])
-        except Exception:
-            est_remaining = max(1, 3 - len(path.past_subqueries))  # fallback
+        # # idk how to ensure its an int, this was an attempt
+        # try:
+        #     est_remaining = int(text.split()[0])
+        # except Exception:
+        #     est_remaining = max(1, 3 - len(path.past_subqueries))  # fallback
 
-        return max(0, est_remaining)
+        return est_remaining

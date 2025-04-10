@@ -15,7 +15,7 @@ from logger_config import logger
 from data_utils import log_random_samples, load_corpus, format_documents_for_final_answer
 from vllm_client_local import VllmClient, get_vllm_model_id
 from utils import save_json_to_file, AtomicCounter
-from agent import CoRagAgent, RagPath
+from agent import CoRagAgent, RagPath, CoRagAgentWithPHS
 from inference.metrics import compute_metrics_dict
 
 logging.getLogger("openai").setLevel(logging.WARNING)
@@ -36,6 +36,7 @@ assert e5_ip is not None, "E5 IP address must be set"
 vllm_client: VllmClient = VllmClient(get_vllm_model_id(host=vllm_ip), host=vllm_ip)
 corpus: Dataset = load_corpus()
 corag_agent: CoRagAgent = CoRagAgent(vllm_client=vllm_client, corpus=corpus, e5_ip=e5_ip, vllm_ip=vllm_ip)
+# corag_agent: CoRagAgentWithPHS = CoRagAgentWithPHS(vllm_client=vllm_client, corpus=corpus, e5_ip=e5_ip, vllm_ip=vllm_ip, confidence_threshold=0.05)
 tokenizer: PreTrainedTokenizerFast = AutoTokenizer.from_pretrained(get_vllm_model_id(host=vllm_ip))
 tokenizer_lock: threading.Lock = threading.Lock()
 processed_cnt: AtomicCounter = AtomicCounter()
@@ -67,6 +68,13 @@ def _generate_single_example(ex: Dict) -> Dict:
         )
     else:
         raise ValueError(f'Invalid decode strategy: {args.decode_strategy}')
+    #path = corag_agent.tree_search(
+    #    query=ex['query'], 
+    #    task_desc=ex['task_desc'],
+    #    max_path_length=args.max_path_length,
+    #    temperature=0.2,
+    #    max_tree_size=50
+    #)
 
     documents: List[str] = format_documents_for_final_answer(
         args=args,
@@ -122,13 +130,13 @@ def main():
 
     if args.dry_run:
         ds = ds.select(range(16))
+    ds = ds.select(range(1000))
     log_random_samples(ds)
     global total_cnt
     total_cnt = len(ds)
 
-    results: List[Dict] = list(executor.map(_generate_single_example, ds))[:5] # cut down to 5 for testing
+    results: List[Dict] = list(executor.map(_generate_single_example, ds))
     
-    exit() # exit early for testing
     ds = ds.add_column('prediction', [r['prediction'] for r in results])
     ds = ds.add_column('subqueries', [r['subqueries'] for r in results])
     ds = ds.add_column('subanswers', [r['subanswers'] for r in results])
