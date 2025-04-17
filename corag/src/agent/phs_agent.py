@@ -19,6 +19,7 @@ class TreeNode:
         self.logprob = logprob  # cumulative log probability of subqueries
         self.depth = len(path.past_subqueries)
         self.parent = parent
+        self.children = []
         self.levin_cost = 0.0
 
     def __lt__(self, other):
@@ -49,24 +50,31 @@ class CoRagAgentWithPHS(CoRagAgent):
         max_message_length: int = 4096,
         temperature: float = 0.7,
         expand_size: int = 4,
-        max_tree_size = 50,
+        max_tree_size = 100,
         **kwargs
     ) -> RagPath:
-        root_path = RagPath(query=query, past_subqueries=[], past_subanswers=[], past_doc_ids=[])
+        root_path = RagPath(query=query, past_subqueries=[query], past_subanswers=[], past_doc_ids=[])
         root_node = TreeNode(path=root_path, logprob=0.0)
-
+        all_nodes = []
         open_list = []
         heapq.heappush(open_list, root_node)
-        
         explored_num = 0
-
         while open_list and explored_num < max_tree_size:
             explored_num += 1
             node = heapq.heappop(open_list)
             current_path = node.path
-
-            if self._is_solution(current_path, task_desc, max_message_length):
-                return current_path
+            
+            subquery = node.path.past_subqueries[-1]
+            subanswer, doc_ids = self._get_subanswer_and_doc_ids(
+                subquery=subquery, max_message_length=max_message_length
+            )
+            
+            current_path.past_subanswers.append(subanswer)
+            current_path.past_doc_ids.append(doc_ids)
+            # now the subanswers and subqueries are the same length
+            
+            # if self._is_solution(current_path, task_desc, max_message_length):
+            #     return current_path
 
             messages = get_generate_subquery_prompt(
                 query=query,
@@ -94,37 +102,64 @@ class CoRagAgentWithPHS(CoRagAgent):
                 token_logprobs = [c.logprob for c in choice.logprobs.content]
                 
                 sub_logprob = sum(token_logprobs) / max(len(token_logprobs), 1)
-
-                subanswer, doc_ids = self._get_subanswer_and_doc_ids(
-                    subquery=subquery, max_message_length=max_message_length
-                )
-
+                
                 new_path = RagPath(
                     query=query,
                     past_subqueries=current_path.past_subqueries + [subquery],
-                    past_subanswers=current_path.past_subanswers + [subanswer],
-                    past_doc_ids=current_path.past_doc_ids + [doc_ids]
+                    past_subanswers=current_path.past_subanswers,
+                    past_doc_ids=current_path.past_doc_ids
                 )
 
                 running_cost = len(new_path.past_subqueries) # number of nodes (g(n) in the paper)
                 policy_logprob = node.logprob + sub_logprob # cumulative log probability (log(pi(n)) in the paper)
-                heuristic_cost = self._estimate_heuristic_llm(new_path, task_desc, max_message_length, **kwargs) # h(n) in the paper
+                # heuristic_cost = self._estimate_heuristic_llm(new_path, task_desc, max_message_length, **kwargs) # h(n) in the paper
+                heuristic_cost = max_path_length - len(new_path.past_subqueries) # h(n) in the paper
                 levin_cost = math.log(running_cost + heuristic_cost + 1e-5) - policy_logprob
 
                 new_node = TreeNode(path=new_path, logprob=policy_logprob, parent=node)
+                node.children.append(new_node)
+                all_nodes.append(new_node)
                 new_node.levin_cost = levin_cost
                 heapq.heappush(open_list, new_node)
-
-        # use this only if nothing worked idk?? can use logger instead
-        print(f"Did not find a solution within {max_tree_size} nodes. Returning the root path.")
-        return self.sample_path(
-                    query=query,
-                    task_desc=task_desc,
-                    max_path_length=max_path_length,
-                    max_message_length=max_message_length,
-                    temperature=temperature,
-                    **kwargs
+                
+        # Loop over all leaf nodes and choose the best one according to _eval_single_path
+        best_node = None
+        best_score = float('inf')
+        for node in all_nodes:
+            if len(node.children) > 0:
+                continue
+            path = node.path
+            
+            if len(path.past_subqueries) > len(path.past_subanswers):
+                # If the path is not complete, complete it
+                subanswer, doc_ids = self._get_subanswer_and_doc_ids(
+                    subquery=path.past_subqueries[-1], max_message_length=max_message_length
                 )
+                
+                path.past_subanswers.append(subanswer)
+                path.past_doc_ids.append(doc_ids)
+            
+            score = self._eval_single_path(path, max_message_length=max_message_length)
+            if score < best_score:
+                best_score = score
+                best_node = node
+        if best_node is not None:
+            return best_node.path
+        # If no solution was found, return the root path
+        # This is a fallback and should not happen in normal circumstances.
+        # logger.warning(f"Did not find a solution within {max_tree_size} nodes. Returning the root path.")
+        # This should never happen, but just in case
+        return self.root_path
+        # # use this only if nothing worked idk?? can use logger instead
+        # print(f"Did not find a solution within {max_tree_size} nodes. Returning the root path.")
+        # return self.sample_path(
+        #             query=query,
+        #             task_desc=task_desc,
+        #             max_path_length=max_path_length,
+        #             max_message_length=max_message_length,
+        #             temperature=temperature,
+        #             **kwargs
+        #         )
 
     def _is_solution(self, path: RagPath, task_desc: str, max_message_length: int) -> bool:
         log_prob = self._eval_single_path(
@@ -156,7 +191,7 @@ class CoRagAgentWithPHS(CoRagAgent):
         )
         # messages.append({'role': 'user', 'content': 'How many more subqueries are needed to fully answer the original query. Respond with a single integer.'})
         messages.append({'role': 'user', 
-                         'content': f'What subqueries should be asked to fully answer the original query: "{path.query}". Separate subqueries with question marks "?".'})
+                         'content': f'What additional subqueries should be asked to fully answer the original query: "{path.query}". Separate subqueries with question marks "?".'})
         self._truncate_long_messages(messages, max_length=max_message_length)
 
         response: ChatCompletion = self.vllm_client.call_chat(
@@ -170,10 +205,17 @@ class CoRagAgentWithPHS(CoRagAgent):
         
         est_remaining = max(1,len(text.split("?")))
 
+        # response: ChatCompletion = self.vllm_client.call_chat(
+        #     messages=messages,
+        #     return_str=False,
+        #     max_tokens=5,
+        #     **kwargs
+        # )
+
         # # idk how to ensure its an int, this was an attempt
         # try:
         #     est_remaining = int(text.split()[0])
         # except Exception:
         #     est_remaining = max(1, 3 - len(path.past_subqueries))  # fallback
 
-        return est_remaining
+        return max(0, est_remaining)

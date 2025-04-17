@@ -3,7 +3,7 @@
 #SBATCH --account=dsi        # Replace ACCOUNT with your group account name
 #SBATCH --job-name=VLLMServer    # The job name
 #SBATCH -c 8                     # The number of cpu cores to use (up to 32 cores per server)
-#SBATCH --time=0-6:00            # The time the job will take to run in D-HH:MM
+#SBATCH --time=0-12:00            # The time the job will take to run in D-HH:MM
 #SBATCH --gres=gpu:1
 #SBATCH --output=vllm_client.log
 #SBATCH --mem=50GB
@@ -19,6 +19,7 @@ vllm serve corag/CoRAG-Llama3.1-8B-MultihopQA \
     --tensor-parallel-size 1 \
     --max-model-len 8192 \
     --enforce-eager
+    #--dtype=half \
     # --api-key token-123
 
 # End of script

@@ -13,7 +13,7 @@ from logger_config import logger
 
 
 def load_corpus() -> Dataset:
-    corpus: Dataset = load_dataset('corag/kilt-corpus', split='train')
+    corpus: Dataset = load_dataset('corag/kilt-corpus', split='train', num_proc=32)
     logger.info(f'Loaded {len(corpus)} passages from corag/kilt-corpus')
     return corpus
 

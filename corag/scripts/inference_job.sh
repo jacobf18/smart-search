@@ -16,9 +16,9 @@ cd /burg/home/jef2182/smart-search/corag/
 PYTHONPATH=src/ python src/inference/run_inference.py \
         --eval_task "hotpotqa" \
         --eval_split "validation" \
-        --max_path_length "6" \
-        --decode_strategy "tree_search" \
-        --output_dir "tmp/6" \
+        --max_path_length "4" \
+        --decode_strategy "phs" \
+        --output_dir "tmp/4" \
         --do_eval \
         --num_threads 32 \
         --overwrite_output_dir \
