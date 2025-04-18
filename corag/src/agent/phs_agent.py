@@ -12,6 +12,8 @@ from agent.corag_agent import _normalize_subquery
 
 from vllm_client_local import VllmClient
 from datasets import Dataset
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
 
 class TreeNode:
     def __init__(self, path: RagPath, logprob: float, parent: Optional["TreeNode"] = None):
@@ -42,6 +44,29 @@ class CoRagAgentWithPHS(CoRagAgent):
         """
         super().__init__(vllm_client, corpus, e5_ip, vllm_ip)
         self.confidence_threshold = confidence_threshold
+        self.embedding_model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
+        self.similarity_threshold = 0.95
+        
+    def filter_similar_subqueries(self, choices):
+        filtered_indices = []
+        subqueries = [_normalize_subquery(choice.message.content) for choice in choices]
+        embeddings = self.embedding_model.encode(subqueries, show_progress_bar=False)
+        
+        # cluster the embeddings by cosine similarity of the embeddings
+        for i in range(len(embeddings)):
+            is_similar = False
+            for j in range(i):
+                sim = cosine_similarity(
+                    embeddings[i].reshape(1,-1), 
+                    embeddings[j].reshape(1,-1)
+                    # dim=0
+                ).item()
+                if sim > self.similarity_threshold:
+                    is_similar = True
+                    break
+            if not is_similar:
+                filtered_indices.append(i)
+        return [choices[i] for i in filtered_indices]
 
     def tree_search(
         self, query: str, 
@@ -60,6 +85,7 @@ class CoRagAgentWithPHS(CoRagAgent):
         heapq.heappush(open_list, root_node)
         explored_num = 0
         while open_list and explored_num < max_tree_size:
+            print(f"Explored nodes: {explored_num}, Open list size: {len(open_list)}")
             explored_num += 1
             node = heapq.heappop(open_list)
             current_path = node.path
@@ -93,8 +119,10 @@ class CoRagAgentWithPHS(CoRagAgent):
                 temperature=temperature,
                 **kwargs
             )
+            
+            filtered_choices = self.filter_similar_subqueries(completion.choices)
 
-            for choice in completion.choices:
+            for choice in filtered_choices:
                 subquery = _normalize_subquery(choice.message.content)
                 if subquery in current_path.past_subqueries:
                     continue
@@ -144,22 +172,12 @@ class CoRagAgentWithPHS(CoRagAgent):
                 best_score = score
                 best_node = node
         if best_node is not None:
-            return best_node.path
+            return best_node.path, root_node
         # If no solution was found, return the root path
         # This is a fallback and should not happen in normal circumstances.
         # logger.warning(f"Did not find a solution within {max_tree_size} nodes. Returning the root path.")
         # This should never happen, but just in case
         return self.root_path
-        # # use this only if nothing worked idk?? can use logger instead
-        # print(f"Did not find a solution within {max_tree_size} nodes. Returning the root path.")
-        # return self.sample_path(
-        #             query=query,
-        #             task_desc=task_desc,
-        #             max_path_length=max_path_length,
-        #             max_message_length=max_message_length,
-        #             temperature=temperature,
-        #             **kwargs
-        #         )
 
     def _is_solution(self, path: RagPath, task_desc: str, max_message_length: int) -> bool:
         log_prob = self._eval_single_path(
