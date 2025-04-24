@@ -62,6 +62,7 @@ class CoRagAgent:
         past_subqueries: List[str] = kwargs.pop('past_subqueries', [])
         past_subanswers: List[str] = kwargs.pop('past_subanswers', [])
         past_doc_ids: List[List[str]] = kwargs.pop('past_doc_ids', [])
+        scores: List[int] = []
         assert len(past_subqueries) == len(past_subanswers) == len(past_doc_ids)
 
         subquery_temp: float = temperature
@@ -92,12 +93,31 @@ class CoRagAgent:
             past_subqueries.append(subquery)
             past_subanswers.append(subanswer)
             past_doc_ids.append(doc_ids)
+            
+            new_path = RagPath(
+                query=query,
+                past_subqueries=past_subqueries,
+                past_subanswers=past_subanswers,
+                past_doc_ids=past_doc_ids
+            )
+            
+            # Score the new path
+            score = self._eval_state_without_answer(
+                path=new_path,
+                num_rollouts=3,
+                task_desc=task_desc,
+                max_path_length=3,
+                temperature=0.7,
+                max_message_length=max_message_length
+            )
+            scores.append(score)
 
         return RagPath(
             query=query,
             past_subqueries=past_subqueries,
             past_subanswers=past_subanswers,
             past_doc_ids=past_doc_ids,
+            scores=scores
         )
 
     def generate_final_answer(

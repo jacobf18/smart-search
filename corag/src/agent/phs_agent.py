@@ -1,6 +1,7 @@
 import heapq
 import math
 from copy import deepcopy
+from turtle import pen
 from typing import Optional, List, Dict
 
 from agent.agent_utils import RagPath
@@ -14,6 +15,8 @@ from vllm_client_local import VllmClient
 from datasets import Dataset
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
+from scipy.special import softmax
+import numpy as np
 
 class TreeNode:
     def __init__(self, path: RagPath, logprob: float, parent: Optional["TreeNode"] = None):
@@ -23,6 +26,7 @@ class TreeNode:
         self.parent = parent
         self.children = []
         self.levin_cost = 0.0
+        self.penalty = np.inf
 
     def __lt__(self, other):
         return self.levin_cost < other.levin_cost
@@ -67,6 +71,16 @@ class CoRagAgentWithPHS(CoRagAgent):
             if not is_similar:
                 filtered_indices.append(i)
         return [choices[i] for i in filtered_indices]
+    
+    def tree_to_dict(self, node):
+        # Create a shallow copy of the node's __dict__
+        node_dict = node.__dict__.copy()
+        
+        # Recursively convert children
+        if 'children' in node_dict and isinstance(node_dict['children'], list):
+            node_dict['children'] = [self.tree_to_dict(child) for child in node_dict['children']]
+        
+        return node_dict
 
     def tree_search(
         self, query: str, 
@@ -78,26 +92,17 @@ class CoRagAgentWithPHS(CoRagAgent):
         max_tree_size = 100,
         **kwargs
     ) -> RagPath:
-        root_path = RagPath(query=query, past_subqueries=[query], past_subanswers=[], past_doc_ids=[])
+        root_path = RagPath(query=query, past_subqueries=[], past_subanswers=[], past_doc_ids=[])
         root_node = TreeNode(path=root_path, logprob=0.0)
         all_nodes = []
         open_list = []
         heapq.heappush(open_list, root_node)
         explored_num = 0
         while open_list and explored_num < max_tree_size:
-            print(f"Explored nodes: {explored_num}, Open list size: {len(open_list)}")
+            # print(f"Explored nodes: {explored_num}, Open list size: {len(open_list)}")
             explored_num += 1
             node = heapq.heappop(open_list)
             current_path = node.path
-            
-            subquery = node.path.past_subqueries[-1]
-            subanswer, doc_ids = self._get_subanswer_and_doc_ids(
-                subquery=subquery, max_message_length=max_message_length
-            )
-            
-            current_path.past_subanswers.append(subanswer)
-            current_path.past_doc_ids.append(doc_ids)
-            # now the subanswers and subqueries are the same length
             
             # if self._is_solution(current_path, task_desc, max_message_length):
             #     return current_path
@@ -121,25 +126,49 @@ class CoRagAgentWithPHS(CoRagAgent):
             )
             
             filtered_choices = self.filter_similar_subqueries(completion.choices)
+            
+            new_paths = []
+            scores = []
 
             for choice in filtered_choices:
                 subquery = _normalize_subquery(choice.message.content)
-                if subquery in current_path.past_subqueries:
-                    continue
+                # if subquery in current_path.past_subqueries:
+                #     continue
                 
-                token_logprobs = [c.logprob for c in choice.logprobs.content]
+                subanswer, doc_ids = self._get_subanswer_and_doc_ids(
+                    subquery=subquery, max_message_length=max_message_length
+                )
                 
-                sub_logprob = sum(token_logprobs) / max(len(token_logprobs), 1)
+                # token_logprobs = [c.logprob for c in choice.logprobs.content]
+                
+                # sub_logprob = sum(token_logprobs) / max(len(token_logprobs), 1)
                 
                 new_path = RagPath(
                     query=query,
                     past_subqueries=current_path.past_subqueries + [subquery],
-                    past_subanswers=current_path.past_subanswers,
-                    past_doc_ids=current_path.past_doc_ids
+                    past_subanswers=current_path.past_subanswers + [subanswer],
+                    past_doc_ids=current_path.past_doc_ids + [doc_ids]
                 )
-
+                
+                # Score the new path
+                score = self._eval_state_without_answer(
+                    path=new_path,
+                    num_rollouts=3,
+                    task_desc=task_desc,
+                    max_path_length=3,
+                    temperature=0.7,
+                    max_message_length=max_message_length
+                )
+                
+                new_paths.append(new_path)
+                scores.append(score)
+                
+            logprobs = np.log(softmax(-np.array(scores)))
+            
+            for new_path, logprob, score in zip(new_paths, logprobs, scores):
                 running_cost = len(new_path.past_subqueries) # number of nodes (g(n) in the paper)
-                policy_logprob = node.logprob + sub_logprob # cumulative log probability (log(pi(n)) in the paper)
+                # policy_logprob = node.logprob + sub_logprob # cumulative log probability (log(pi(n)) in the paper)
+                policy_logprob = logprob + node.logprob
                 # heuristic_cost = self._estimate_heuristic_llm(new_path, task_desc, max_message_length, **kwargs) # h(n) in the paper
                 heuristic_cost = max_path_length - len(new_path.past_subqueries) # h(n) in the paper
                 levin_cost = math.log(running_cost + heuristic_cost + 1e-5) - policy_logprob
@@ -149,6 +178,7 @@ class CoRagAgentWithPHS(CoRagAgent):
                 all_nodes.append(new_node)
                 new_node.levin_cost = levin_cost
                 heapq.heappush(open_list, new_node)
+                new_node.penalty = score
                 
         # Loop over all leaf nodes and choose the best one according to _eval_single_path
         best_node = None
@@ -171,8 +201,12 @@ class CoRagAgentWithPHS(CoRagAgent):
             if score < best_score:
                 best_score = score
                 best_node = node
+        
+        # Create a dictionary representation of the entire tree
+        # tree_dict = self.tree_to_dict(root_node)
+
         if best_node is not None:
-            return best_node.path, root_node
+            return best_node.path
         # If no solution was found, return the root path
         # This is a fallback and should not happen in normal circumstances.
         # logger.warning(f"Did not find a solution within {max_tree_size} nodes. Returning the root path.")

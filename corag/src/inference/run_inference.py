@@ -35,8 +35,12 @@ assert e5_ip is not None, "E5 IP address must be set"
 
 vllm_client: VllmClient = VllmClient(get_vllm_model_id(host=vllm_ip), host=vllm_ip)
 corpus: Dataset = load_corpus()
-# corag_agent: CoRagAgent = CoRagAgent(vllm_client=vllm_client, corpus=corpus, e5_ip=e5_ip, vllm_ip=vllm_ip)
-corag_agent: CoRagAgentWithPHS = CoRagAgentWithPHS(vllm_client=vllm_client, corpus=corpus, e5_ip=e5_ip, vllm_ip=vllm_ip, confidence_threshold=0.05)
+
+if args.decode_strategy == 'phs':
+    # Initialize CoRagAgentWithPHS for path sampling
+    corag_agent: CoRagAgentWithPHS = CoRagAgentWithPHS(vllm_client=vllm_client, corpus=corpus, e5_ip=e5_ip, vllm_ip=vllm_ip, confidence_threshold=0.05)
+else:
+    corag_agent: CoRagAgent = CoRagAgent(vllm_client=vllm_client, corpus=corpus, e5_ip=e5_ip, vllm_ip=vllm_ip)
 tokenizer: PreTrainedTokenizerFast = AutoTokenizer.from_pretrained(get_vllm_model_id(host=vllm_ip))
 tokenizer_lock: threading.Lock = threading.Lock()
 processed_cnt: AtomicCounter = AtomicCounter()
@@ -46,36 +50,37 @@ total_cnt: int = 0
 def _generate_single_example(ex: Dict) -> Dict:
     # Input columns: query / query_id / answers / context_doc_ids / context_doc_scores
     # Add following columns to the output: subqueries / subanswers / path_doc_ids
-    # if args.decode_strategy == 'greedy' or args.max_path_length < 1:
-    #     path: RagPath = corag_agent.sample_path(
-    #         query=ex['query'], task_desc=ex['task_desc'],
-    #         max_path_length=args.max_path_length,
-    #         temperature=0., max_tokens=64
-    #     )
-    # elif args.decode_strategy == 'tree_search':
-    #     path: RagPath = corag_agent.tree_search(
-    #         query=ex['query'], task_desc=ex['task_desc'],
-    #         max_path_length=args.max_path_length,
-    #         temperature=args.sample_temperature, max_tokens=64
-    #     )
-    # elif args.decode_strategy == 'best_of_n':
-    #     path: RagPath = corag_agent.best_of_n(
-    #         query=ex['query'], task_desc=ex['task_desc'],
-    #         max_path_length=args.max_path_length,
-    #         temperature=args.sample_temperature,
-    #         n = args.best_n,
-    #         max_tokens=64
-    #     )
-    # else:
-    #     raise ValueError(f'Invalid decode strategy: {args.decode_strategy}')
-    path = corag_agent.tree_search(
-       query=ex['query'], 
-       task_desc=ex['task_desc'],
-       max_path_length=args.max_path_length,
-       temperature=0.7,
-       expand_size=10,
-       max_tree_size=100
-    )
+    if args.decode_strategy == 'greedy' or args.max_path_length < 1:
+        path: RagPath = corag_agent.sample_path(
+            query=ex['query'], task_desc=ex['task_desc'],
+            max_path_length=args.max_path_length,
+            temperature=0., max_tokens=64
+        )
+    elif args.decode_strategy == 'tree_search':
+        path: RagPath = corag_agent.tree_search(
+            query=ex['query'], task_desc=ex['task_desc'],
+            max_path_length=args.max_path_length,
+            temperature=args.sample_temperature, max_tokens=64
+        )
+    elif args.decode_strategy == 'best_of_n':
+        path: RagPath = corag_agent.best_of_n(
+            query=ex['query'], task_desc=ex['task_desc'],
+            max_path_length=args.max_path_length,
+            temperature=args.sample_temperature,
+            n = args.best_n,
+            max_tokens=64
+        )
+    elif args.decode_strategy == 'phs':
+        path = corag_agent.tree_search(
+            query=ex['query'],
+            task_desc=ex['task_desc'],
+            max_path_length=args.max_path_length,
+            temperature=0.7,
+            expand_size=6,
+            max_tree_size=60
+        )
+    else:
+        raise ValueError(f'Invalid decode strategy: {args.decode_strategy}')
 
     documents: List[str] = format_documents_for_final_answer(
         args=args,
@@ -96,6 +101,7 @@ def _generate_single_example(ex: Dict) -> Dict:
     ex_with_path['subqueries'] = path.past_subqueries
     ex_with_path['subanswers'] = path.past_subanswers
     ex_with_path['path_doc_ids'] = path.past_doc_ids
+    ex_with_path['scores'] = path.scores
     if 'title' in corpus.column_names:
         ex_with_path['path_doc_titles'] = [
             [corpus[int(doc_id)]['title'] for doc_id in doc_ids] for doc_ids in path.past_doc_ids
@@ -131,7 +137,8 @@ def main():
 
     if args.dry_run:
         ds = ds.select(range(16))
-    ds = ds.select(range(250))
+    else:
+        ds = ds.select(range(250))
     log_random_samples(ds)
     global total_cnt
     total_cnt = len(ds)
@@ -141,6 +148,8 @@ def main():
     ds = ds.add_column('prediction', [r['prediction'] for r in results])
     ds = ds.add_column('subqueries', [r['subqueries'] for r in results])
     ds = ds.add_column('subanswers', [r['subanswers'] for r in results])
+    ds = ds.add_column('path_doc_ids', [r['path_doc_ids'] for r in results])
+    ds = ds.add_column('penalties', [r['scores'] for r in results])
 
     predictions: List[str] = ds['prediction']
     answers: List[List[str]] = ds['answers']
