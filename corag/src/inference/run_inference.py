@@ -16,7 +16,7 @@ from data_utils import log_random_samples, load_corpus, format_documents_for_fin
 from vllm_client_local import VllmClient, get_vllm_model_id
 from utils import save_json_to_file, AtomicCounter
 from agent import CoRagAgent, RagPath, CoRagAgentWithPHS
-from inference.metrics import compute_metrics_dict
+from inference.new_metrics import compute_metrics_dict
 
 logging.getLogger("openai").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -46,6 +46,7 @@ tokenizer_lock: threading.Lock = threading.Lock()
 processed_cnt: AtomicCounter = AtomicCounter()
 total_cnt: int = 0
 
+NUM_GENERATIONS = 5  # Number of final answer generations
 
 def _generate_single_example(ex: Dict) -> Dict:
     # Input columns: query / query_id / answers / context_doc_ids / context_doc_scores
@@ -77,7 +78,7 @@ def _generate_single_example(ex: Dict) -> Dict:
             max_path_length=args.max_path_length,
             temperature=0.7,
             expand_size=6,
-            max_tree_size=60
+            max_tree_size=30
         )
     else:
         raise ValueError(f'Invalid decode strategy: {args.decode_strategy}')
@@ -89,13 +90,17 @@ def _generate_single_example(ex: Dict) -> Dict:
         lock=tokenizer_lock
     )
 
-    prediction: str = corag_agent.generate_final_answer(
-        corag_sample=path,
-        task_desc=ex['task_desc'],
-        documents=documents,
-        max_message_length=args.max_len,
-        temperature=0., max_tokens=128
-    )
+    predictions = [
+        corag_agent.generate_final_answer(
+            corag_sample=path,
+            task_desc=ex['task_desc'],
+            documents=documents,
+            max_message_length=args.max_len,
+            temperature=0.7,
+            max_tokens=128
+        )
+        for _ in range(NUM_GENERATIONS)
+    ]
 
     ex_with_path = copy.deepcopy(ex)
     ex_with_path['subqueries'] = path.past_subqueries
@@ -106,7 +111,7 @@ def _generate_single_example(ex: Dict) -> Dict:
         ex_with_path['path_doc_titles'] = [
             [corpus[int(doc_id)]['title'] for doc_id in doc_ids] for doc_ids in path.past_doc_ids
         ]
-    ex_with_path['prediction'] = prediction
+    ex_with_path['predictions'] = predictions
 
     processed_cnt.increment()
     if processed_cnt.value % 10 == 0:
@@ -145,16 +150,16 @@ def main():
 
     results: List[Dict] = list(executor.map(_generate_single_example, ds))
     
-    ds = ds.add_column('prediction', [r['prediction'] for r in results])
+    ds = ds.add_column('predictions', [r['predictions'] for r in results])
     ds = ds.add_column('subqueries', [r['subqueries'] for r in results])
     ds = ds.add_column('subanswers', [r['subanswers'] for r in results])
     ds = ds.add_column('path_doc_ids', [r['path_doc_ids'] for r in results])
     ds = ds.add_column('penalties', [r['scores'] for r in results])
 
-    predictions: List[str] = ds['prediction']
+    predictions: List[str] = ds['predictions']
     answers: List[List[str]] = ds['answers']
     metric_dict: Dict = compute_metrics_dict(
-        labels=answers, preds=predictions, eval_metrics=args.eval_metrics
+        labels=answers, preds=predictions, eval_metrics=args.eval_metrics, is_multiple_predictions=True
     )
     metric_dict['num_samples'] = len(ds)
     metric_dict['eval_task'] = args.eval_task

@@ -17,8 +17,9 @@ vllm serve corag/CoRAG-Llama3.1-8B-MultihopQA \
     --enable_chunked_prefill --max_num_batched_tokens 2048 \
     --tensor-parallel-size 2 \
     --max-model-len 8192 \
-    --enforce-eager
-    #--dtype=half \
+    --enforce-eager \
+    --gpu-memory-utilization 0.85 \
+    --dtype=half
     # --api-key token-123
 
 # End of script

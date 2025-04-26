@@ -170,7 +170,9 @@ class CoRagAgentWithPHS(CoRagAgent):
                 # policy_logprob = node.logprob + sub_logprob # cumulative log probability (log(pi(n)) in the paper)
                 policy_logprob = logprob + node.logprob
                 # heuristic_cost = self._estimate_heuristic_llm(new_path, task_desc, max_message_length, **kwargs) # h(n) in the paper
-                heuristic_cost = max_path_length - len(new_path.past_subqueries) # h(n) in the paper
+                # heuristic_cost = max_path_length - len(new_path.past_subqueries) # h(n) in the paper
+                
+                heuristic_cost = 0
                 levin_cost = math.log(running_cost + heuristic_cost + 1e-5) - policy_logprob
 
                 new_node = TreeNode(path=new_path, logprob=policy_logprob, parent=node)
